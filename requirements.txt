@@ -1,0 +1,8 @@
+# Project Pitru-Maraka 2.0 — Python dependencies
+pennylane>=0.38.0
+pennylane-lightning>=0.38.0
+# For GPU support (CUDA required): pip install pennylane-lightning[gpu]
+torch>=2.1.0
+pyswisseph>=2.10.0
+numpy>=1.24.0
+pytz>=2023.3
