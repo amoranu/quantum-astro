@@ -99,22 +99,20 @@ def _compute_lagna(birth_jd: float, lat: float, lon: float) -> tuple[float, int]
 
 class AstrologyRouter:
     """
-    Maps the 5 abstract astrological roles to physical entities for one chart.
+    Maps the 4 abstract astrological roles to physical entities for one chart.
 
-    Role → qubit group assignment (per spec):
+    Role → qubit group assignment:
         0  Universal Karaka   → Sun (hardcoded)         → qubits  0-4
         1  9th Lord           → ruler of 9th house sign → qubits  5-9
         2  8th Lord           → ruler of 8th house sign → qubits 10-14
                                 (fallback to natal 8th cusp if ruler == 9th lord)
-        3  Marakesh (2nd Lord)→ ruler of 2nd house sign → qubits 15-19
-        4  Transiting Trigger → Saturn (hardcoded)      → qubits 20-24
+        3  Transiting Trigger → Saturn (hardcoded)      → qubits 15-19
 
-    Overlap fallback (spec §1):
+    Overlap fallback:
         If 9th lord == 8th lord (only happens for Gemini Lagna where Saturn
         rules both Capricorn/8th and Aquarius/9th), the 8th Lord slot is
         replaced by the *natal* 8th house cusp longitude, encoded as its
-        Nakshatra index. This prevents duplicate transit data in the quantum
-        register while preserving the structural house signature.
+        Nakshatra index.
     """
 
     def __init__(
@@ -140,11 +138,9 @@ class AstrologyRouter:
 
         self.ninth_lord  = SIGN_RULERS[self.ninth_sign_idx]
         self._eighth_lord_planet = SIGN_RULERS[self.eighth_sign_idx]
-        self.second_lord = SIGN_RULERS[self.second_sign_idx]
 
-        # Overlap check
+        # Overlap check (Gemini lagna only: Saturn rules both 8th and 9th)
         self.eighth_uses_cusp: bool = (self.ninth_lord == self._eighth_lord_planet)
-        # Whole-sign 8th house cusp: start degree of the 8th sign
         self.eighth_cusp_lon: float = float(self.eighth_sign_idx * 30) % 360.0
 
     # ------------------------------------------------------------------
@@ -153,25 +149,24 @@ class AstrologyRouter:
         return "CUSP" if self.eighth_uses_cusp else self._eighth_lord_planet
 
     def get_roles(self) -> dict:
-        """Human-readable summary of the 5 role assignments."""
+        """Human-readable summary of the 4 role assignments."""
         return {
-            "karaka":             "Sun",
-            "ninth_lord":         self.ninth_lord,
-            "eighth_lord":        self.eighth_lord,
-            "eighth_uses_cusp":   self.eighth_uses_cusp,
-            "eighth_cusp_lon":    self.eighth_cusp_lon if self.eighth_uses_cusp else None,
-            "marakesh_2nd_lord":  self.second_lord,
-            "trigger":            "Saturn",
-            "lagna_sign_idx":     self.lagna_sign_idx,
+            "karaka":           "Sun",
+            "ninth_lord":       self.ninth_lord,
+            "eighth_lord":      self.eighth_lord,
+            "eighth_uses_cusp": self.eighth_uses_cusp,
+            "eighth_cusp_lon":  self.eighth_cusp_lon if self.eighth_uses_cusp else None,
+            "trigger":          "Saturn",
+            "lagna_sign_idx":   self.lagna_sign_idx,
         }
 
     def get_transit_encoding(self, event_jd: float) -> list[int]:
         """
-        Compute 5 Nakshatra indices (0-26) — one per abstract role — for the
+        Compute 4 Nakshatra indices (0-26) — one per abstract role — for the
         planetary positions on *event_jd*.
 
         Returns:
-            [n_karaka, n_9th, n_8th, n_maraka, n_saturn]
+            [n_karaka, n_9th, n_8th, n_saturn]
         """
         # Role 0: Sun (hardcoded karaka of father)
         n0 = longitude_to_nakshatra(get_sidereal_longitude("Sun", event_jd))
@@ -187,10 +182,7 @@ class AstrologyRouter:
                 get_sidereal_longitude(self._eighth_lord_planet, event_jd)
             )
 
-        # Role 3: Marakesh (2nd Lord) transit
-        n3 = longitude_to_nakshatra(get_sidereal_longitude(self.second_lord, event_jd))
+        # Role 3: Saturn (hardcoded time-trigger)
+        n3 = longitude_to_nakshatra(get_sidereal_longitude("Saturn", event_jd))
 
-        # Role 4: Saturn (hardcoded time-trigger)
-        n4 = longitude_to_nakshatra(get_sidereal_longitude("Saturn", event_jd))
-
-        return [n0, n1, n2, n3, n4]
+        return [n0, n1, n2, n3]

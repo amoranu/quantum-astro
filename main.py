@@ -27,15 +27,7 @@ from pathlib import Path
 
 _HERE = Path(__file__).parent
 
-DEFAULT_DATA = (
-    _HERE.parent
-    / "neuro-symbolic-astro"
-    / "astroql"
-    / "applications"
-    / "father_longevity"
-    / "data"
-    / "candidates_post1970.json"
-)
+DEFAULT_DATA = _HERE / "data" / "candidates_post1970.json"
 
 DEFAULT_MODEL = _HERE / "model.pt"
 
@@ -74,7 +66,7 @@ def main() -> None:
         print(f"  Class balance: {Y.mean().item():.3f} (fraction positive)\n")
 
         # ── Phases 3+4: Train ──────────────────────────────────────────────
-        print("[Phases 3+4] Initialising 28-qubit VQC and training …\n")
+        print("[Phases 3+4] Initialising 23-qubit VQC and training …\n")
         from train import train
         model = train(
             X, Y,

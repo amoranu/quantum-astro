@@ -2,7 +2,7 @@
 Phase 2 — Data Pipeline & Encoding (Project Pitru-Maraka 2.0).
 
 Loads candidates_post1970.json, routes each chart through AstrologyRouter,
-converts 5 Nakshatra indices to a flat 25-bit binary array, and assembles
+converts 4 Nakshatra indices to a flat 20-bit binary array, and assembles
 the (X, Y) training tensors.
 
 Positive samples : the actual father_death_date for each subject (label=1).
@@ -32,8 +32,8 @@ def nakshatra_to_bits(idx: int) -> list[int]:
     return [(idx >> (4 - b)) & 1 for b in range(5)]
 
 
-def encode_five_nakshatras(indices: list[int]) -> list[int]:
-    """5 Nakshatra indices → flat 25-bit list."""
+def encode_four_nakshatras(indices: list[int]) -> list[int]:
+    """4 Nakshatra indices → flat 20-bit list."""
     bits: list[int] = []
     for idx in indices:
         bits.extend(nakshatra_to_bits(idx))
@@ -104,7 +104,7 @@ def build_dataset(
         verbose      : print progress.
 
     Returns:
-        X : FloatTensor (N, 25)  — binary transit encodings.
+        X : FloatTensor (N, 20)  — binary transit encodings.
         Y : FloatTensor (N, 1)   — labels (1 = death event, 0 = baseline).
     """
     records: list[dict] = json.loads(Path(json_path).read_text(encoding="utf-8"))
@@ -145,7 +145,7 @@ def build_dataset(
         try:
             death_jd = date_to_jd(death_date)
             naks = router.get_transit_encoding(death_jd)
-            rows_X.append(encode_five_nakshatras(naks))
+            rows_X.append(encode_four_nakshatras(naks))
             rows_Y.append(1)
         except Exception as exc:
             if verbose:
@@ -161,7 +161,7 @@ def build_dataset(
             try:
                 neg_jd = date_to_jd(neg_date)
                 naks_neg = router.get_transit_encoding(neg_jd)
-                rows_X.append(encode_five_nakshatras(naks_neg))
+                rows_X.append(encode_four_nakshatras(naks_neg))
                 rows_Y.append(0)
             except Exception:
                 continue
@@ -190,10 +190,7 @@ def build_dataset(
 if __name__ == "__main__":
     import sys
     path = sys.argv[1] if len(sys.argv) > 1 else (
-        Path(__file__).parent.parent
-        / "neuro-symbolic-astro"
-        / "astroql" / "applications" / "father_longevity"
-        / "data" / "candidates_post1970.json"
+        Path(__file__).parent / "data" / "candidates_post1970.json"
     )
     X, Y = build_dataset(path)
     print(f"X shape: {X.shape}  Y shape: {Y.shape}")

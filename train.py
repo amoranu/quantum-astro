@@ -4,9 +4,8 @@ Phase 4 — QML Training Loop (Project Pitru-Maraka 2.0).
 Wraps the PennyLane TorchLayer in a thin nn.Module, trains it with
 BCELoss + Adam, and saves a checkpoint to disk.
 
-Batch size is fixed at 16 to stay within the RTX 4060 8 GB VRAM budget
-(each 28-qubit adjoint-diff run consumes ~4.2 GB peak; sequential per-sample
-processing inside TorchLayer means only one state vector is live at a time).
+23-qubit state vectors are small (~8 MB each), so VRAM is not a constraint.
+Batch size 16 is kept for gradient stability.
 """
 
 from __future__ import annotations
@@ -22,9 +21,9 @@ from circuit import build_qlayer
 
 class QMLModel(nn.Module):
     """
-    Thin wrapper around the 28-qubit PennyLane TorchLayer.
+    Thin wrapper around the 23-qubit PennyLane TorchLayer.
 
-    Forward input  : (batch, 25) float — binary transit encoding.
+    Forward input  : (batch, 20) float — binary transit encoding.
     Forward output : (batch,)   float — P(father death) in [0, 1].
     """
 
@@ -58,7 +57,7 @@ def train(
     Train the QML model and save a checkpoint.
 
     Args:
-        X          : (N, 25) float tensor — binary transit encodings.
+        X          : (N, 20) float tensor — binary transit encodings.
         Y          : (N, 1)  float tensor — labels (1=death, 0=baseline).
         epochs     : number of full passes over the dataset.
         batch_size : samples per gradient step (16 = VRAM-safe default).

@@ -11,7 +11,7 @@ Returns a dict with:
     prediction  : "High Risk Window" if P(death) ≥ 0.85, else "Baseline"
     probability : float in [0, 1]
     roles       : dynamic planet assignments for this subject
-    nakshatras  : [n_sun, n_9th, n_8th, n_maraka, n_saturn]
+    nakshatras  : [n_sun, n_9th, n_8th, n_saturn]
     target_date : echo of the input date
 """
 
@@ -22,7 +22,7 @@ from pathlib import Path
 import torch
 
 from router import AstrologyRouter, date_to_jd
-from pipeline import encode_five_nakshatras
+from pipeline import encode_four_nakshatras
 from train import QMLModel, load_model
 
 RISK_THRESHOLD = 0.85
@@ -57,8 +57,8 @@ def predict(
     # 5.2 — Encode the transit sky on target_date
     event_jd   = date_to_jd(target_date)
     nakshatras = router.get_transit_encoding(event_jd)
-    bits       = encode_five_nakshatras(nakshatras)
-    x          = torch.tensor([bits], dtype=torch.float32)   # (1, 25)
+    bits       = encode_four_nakshatras(nakshatras)
+    x          = torch.tensor([bits], dtype=torch.float32)   # (1, 20)
 
     # 5.3 — Forward pass (inference only)
     model.eval()
@@ -112,7 +112,7 @@ def scan_window(
         try:
             event_jd   = date_to_jd(date_str)
             nakshatras = router.get_transit_encoding(event_jd)
-            bits       = encode_five_nakshatras(nakshatras)
+            bits       = encode_four_nakshatras(nakshatras)
             x          = torch.tensor([bits], dtype=torch.float32)
 
             model.eval()

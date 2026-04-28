@@ -10,7 +10,7 @@ set -e
 VENV="$HOME/.venvs/quantum-astro"
 # Windows path → WSL path for the project
 PROJECT="/mnt/c/Users/ravii/.gemini/antigravity/playground/quantum-astro"
-DATA="/mnt/c/Users/ravii/.gemini/antigravity/playground/neuro-symbolic-astro/astroql/applications/father_longevity/data/candidates_post1970.json"
+DATA="$PROJECT/data/candidates_post1970.json"
 
 source "$VENV/bin/activate"
 
