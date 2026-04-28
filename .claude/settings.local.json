@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell(wsl -d Ubuntu -- bash -c \"ps -C python3 -o pid,etime,pcpu --no-headers\")",
+      "PowerShell(wsl -d Ubuntu -- bash -c \"ps -C python3 -o pid --no-headers | xargs -r kill -9 2>/dev/null; sleep 1; ps -C python3 -o pid --no-headers || echo CLEAN\")",
+      "PowerShell(wsl -d Ubuntu -- bash -c \"ps -C python3 -o etime --no-headers\")"
+    ]
+  }
+}

@@ -2,10 +2,14 @@
 Phase 4 — QML Training Loop (Project Pitru-Maraka 2.0).
 
 Wraps the PennyLane TorchLayer in a thin nn.Module, trains it with
-BCELoss + Adam, and saves a checkpoint to disk.
+BCEWithLogitsLoss + Adam, and saves a checkpoint to disk.
+
+The model output is logit = α · E[Z] + β, where (α, β) are trainable
+classical parameters. Probability is recovered as σ(logit). Without this
+readout-bias, the circuit alone cannot push P past ~0.5 confidently for
+either class because E[Z] tends to stay near zero.
 
 23-qubit state vectors are small (~8 MB each), so VRAM is not a constraint.
-Batch size 16 is kept for gradient stability.
 """
 
 from __future__ import annotations
@@ -14,31 +18,37 @@ from pathlib import Path
 
 import torch
 import torch.nn as nn
-from torch.utils.data import DataLoader, TensorDataset
+from torch.utils.data import DataLoader, TensorDataset, WeightedRandomSampler
 
 from circuit import build_qlayer
 
 
 class QMLModel(nn.Module):
     """
-    Thin wrapper around the 23-qubit PennyLane TorchLayer.
+    23-qubit PennyLane TorchLayer + classical readout (α · E[Z] + β).
 
     Forward input  : (batch, 20) float — binary transit encoding.
-    Forward output : (batch,)   float — P(father death) in [0, 1].
+    Forward output : (batch,)   float — *logits* (apply σ for probability).
+
+    α is initialised to -1 so that σ(α·E[Z] + β) at β=0, E[Z]=0 starts at 0.5,
+    and a negative E[Z] (typical "death" signal direction) maps to higher P.
     """
 
     def __init__(self) -> None:
         super().__init__()
         self.qlayer = build_qlayer()
+        self.alpha = nn.Parameter(torch.tensor(-1.0))
+        self.beta  = nn.Parameter(torch.tensor(0.0))
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        # BasisState requires 1-D input; TorchLayer 0.44 passes the full batch.
-        # Loop so each qlayer call receives (25,) → returns scalar E[Z] ∈ [-1, 1].
-        # Convert expectation value to death probability: P(1) = (1 − E[Z]) / 2
+        # TorchLayer 0.44 passes full batch; loop so each call receives (20,).
         if x.dim() == 1:
             x = x.unsqueeze(0)
         expvals = torch.stack([self.qlayer(x[i]) for i in range(x.shape[0])])  # (B,)
-        return (1.0 - expvals) / 2.0  # (B,) — P(death=1) ∈ [0, 1]
+        return self.alpha * expvals + self.beta  # logits
+
+    def predict_proba(self, x: torch.Tensor) -> torch.Tensor:
+        return torch.sigmoid(self.forward(x))
 
 
 # ---------------------------------------------------------------------------
@@ -69,16 +79,30 @@ def train(
     """
     y_flat   = Y.squeeze(1)                             # (N,)
     dataset  = TensorDataset(X, y_flat)
-    loader   = DataLoader(dataset, batch_size=batch_size, shuffle=True, drop_last=False)
+
+    # WeightedRandomSampler — balance positive vs negative classes per batch.
+    # Without this the model collapses to "always predict 0" (91.9% accuracy
+    # on the 8.1%-positive dataset).
+    n_pos = int(y_flat.sum().item())
+    n_neg = len(y_flat) - n_pos
+    w_pos = 1.0 / max(n_pos, 1)
+    w_neg = 1.0 / max(n_neg, 1)
+    sample_weights = torch.where(y_flat == 1, w_pos, w_neg)
+    sampler = WeightedRandomSampler(
+        weights=sample_weights, num_samples=len(y_flat), replacement=True
+    )
+    loader = DataLoader(dataset, batch_size=batch_size, sampler=sampler, drop_last=False)
 
     model     = QMLModel()
-    criterion = nn.BCELoss()
+    criterion = nn.BCEWithLogitsLoss()
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
 
     n_params = sum(p.numel() for p in model.parameters())
     print(
-        f"\n[train] {len(dataset)} samples | {epochs} epochs | "
-        f"batch={batch_size} | lr={lr} | params={n_params}\n"
+        f"\n[train] {len(dataset)} samples ({n_pos} pos / {n_neg} neg) | "
+        f"{epochs} epochs | batch={batch_size} | lr={lr} | params={n_params}\n"
+        f"[train] WeightedRandomSampler active — batches ~50/50 balanced\n",
+        flush=True,
     )
 
     history: list[float] = []
@@ -101,12 +125,25 @@ def train(
         avg_loss = epoch_loss / max(n_batches, 1)
         history.append(avg_loss)
 
-        if epoch % 10 == 0 or epoch == 1:
+        if epoch % 5 == 0 or epoch == 1:
             model.eval()
             with torch.no_grad():
-                all_pred = model(X)
+                all_logits = model(X)
+                all_pred   = torch.sigmoid(all_logits)
                 acc = ((all_pred >= 0.5).float() == y_flat).float().mean().item()
-            print(f"  epoch {epoch:3d}/{epochs}  loss={avg_loss:.4f}  acc={acc:.4f}")
+                pos_mask = (y_flat == 1)
+                neg_mask = ~pos_mask
+                acc_pos = ((all_pred[pos_mask] >= 0.5).float()).mean().item() if pos_mask.any() else 0.0
+                acc_neg = ((all_pred[neg_mask] <  0.5).float()).mean().item() if neg_mask.any() else 0.0
+                a, b = model.alpha.item(), model.beta.item()
+            print(
+                f"  epoch {epoch:3d}/{epochs}  loss={avg_loss:.4f}  "
+                f"acc={acc:.4f}  pos={acc_pos:.3f}  neg={acc_neg:.3f}  "
+                f"α={a:+.3f} β={b:+.3f}",
+                flush=True,
+            )
+        else:
+            print(f"  epoch {epoch:3d}/{epochs}  loss={avg_loss:.4f}", flush=True)
 
     # ── Save checkpoint ────────────────────────────────────────────────────
     save_path = Path(save_path)
@@ -119,7 +156,7 @@ def train(
         },
         save_path,
     )
-    print(f"\n[train] Checkpoint saved → {save_path}")
+    print(f"\n[train] Checkpoint saved → {save_path}", flush=True)
 
     model.eval()
     return model

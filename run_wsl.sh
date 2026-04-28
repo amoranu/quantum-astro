@@ -25,4 +25,6 @@ print('VRAM:', round(torch.cuda.get_device_properties(0).total_memory/1e9, 1), '
 "
 
 cd "$PROJECT"
-python3 main.py --data "$DATA" "$@"
+# -u: unbuffered stdout/stderr so progress is visible in real time
+export PYTHONUNBUFFERED=1
+python3 -u main.py --data "$DATA" "$@"

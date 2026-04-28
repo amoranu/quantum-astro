@@ -60,10 +60,10 @@ def predict(
     bits       = encode_four_nakshatras(nakshatras)
     x          = torch.tensor([bits], dtype=torch.float32)   # (1, 20)
 
-    # 5.3 — Forward pass (inference only)
+    # 5.3 — Forward pass (inference only) — model returns logits, apply σ
     model.eval()
     with torch.no_grad():
-        prob: float = model(x).item()
+        prob: float = torch.sigmoid(model(x)).item()
 
     # 5.4 — Decision gate
     if prob >= RISK_THRESHOLD:
@@ -117,7 +117,7 @@ def scan_window(
 
             model.eval()
             with torch.no_grad():
-                prob = model(x).item()
+                prob = torch.sigmoid(model(x)).item()
 
             if prob >= RISK_THRESHOLD:
                 results.append({"date": date_str, "probability": round(prob, 6)})

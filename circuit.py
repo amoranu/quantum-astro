@@ -14,11 +14,20 @@ Input encoding:
     PennyLane diff method, and accepts 1-D float tensors directly.
 
 Entanglement topology:
-    Law 1 — Karaka meets Time     : CRZ  Sun(0-4)   ↔ Saturn(15-19)
-    Law 2 — Father & Death houses : CRZ  9th(5-9)   ↔ 8th(10-14)
-    Funnel to ancilla 20          : CRY  first qubit of each group → 20
-    Funnel to ancilla 21          : CRY  last  qubit of each group → 21
+    Law 1 — Karaka meets Time     : CRX  Sun(0-4)   ↔ Saturn(15-19)
+    Law 2 — Father & Death houses : CRX  9th(5-9)   ↔ 8th(10-14)
+    Full funnel → ancilla 20      : CRY  every spatial qubit (0-19) → 20
+    Full funnel → ancilla 21      : CRY  every spatial qubit (0-19) → 21
     Ancilla → target              : CRY  20→22, 21→22
+
+Why CRX (not CRZ): CRZ is diagonal in the Z-basis and commutes with the
+final qml.expval(qml.PauliZ) measurement, so phase-only entanglement does
+not propagate to the readout. CRX changes populations and does propagate.
+
+Why full funnel: the previous {first, last}-of-group funnel only routed
+8 of 20 spatial qubits to the ancilla. Middle qubits (1,2,3, 6,7,8, ...)
+contributed nothing to the gradient, leaving 12 of 20 input bits
+effectively masked out.
 
 Device strategy:
     lightning.gpu  (WSL/Linux with custatevec) — adjoint diff
@@ -40,14 +49,14 @@ ANCILLA_0  = 20
 ANCILLA_1  = 21
 TARGET     = 22
 
-# 60 trainable parameters total
+# 92 trainable quantum parameters total (+2 classical α, β in train.py)
 WEIGHT_SHAPES: dict[str, tuple[int, ...]] = {
     "weights_ry":    (N_SPATIAL,),  # RY on each spatial qubit
-    "weights_rx":    (N_SPATIAL,),  # RX on each spatial qubit (trainable layer)
-    "weights_law1":  (5,),          # Law 1 CRZ: Sun ↔ Saturn
-    "weights_law2":  (5,),          # Law 2 CRZ: 9th ↔ 8th
-    "weights_anc0":  (N_GROUPS,),   # CRY first-of-group → ancilla 20
-    "weights_anc1":  (N_GROUPS,),   # CRY last-of-group  → ancilla 21
+    "weights_rx":    (N_SPATIAL,),  # RX on each spatial qubit
+    "weights_law1":  (5,),          # Law 1 CRX: Sun ↔ Saturn
+    "weights_law2":  (5,),          # Law 2 CRX: 9th ↔ 8th
+    "weights_anc0":  (N_SPATIAL,),  # CRY every spatial qubit → ancilla 20
+    "weights_anc1":  (N_SPATIAL,),  # CRY every spatial qubit → ancilla 21
     "weights_target": (2,),         # CRY ancilla → target
 }
 
@@ -100,21 +109,23 @@ def build_qlayer() -> qml.qnn.TorchLayer:
             qml.RX(weights_rx[i], wires=i)
 
         # ── Law 1 — The Karaka meets Time (Sun ↔ Saturn) ────────────────────
+        # CRX (not CRZ): population-changing entanglement that propagates to
+        # the final Z measurement.
         for i in range(5):
-            qml.CRZ(weights_law1[i], wires=[i, i + 15])
+            qml.CRX(weights_law1[i], wires=[i, i + 15])
 
         # ── Law 2 — House of Father & Death (9th ↔ 8th) ────────────────────
         for i in range(5):
-            qml.CRZ(weights_law2[i], wires=[i + 5, i + 10])
+            qml.CRX(weights_law2[i], wires=[i + 5, i + 10])
 
-        # ── C. Target Funnel ─────────────────────────────────────────────────
-        # First qubit of each group (Sun[0], 9th[0], 8th[0], Saturn[0]) → 20
-        for k, ctrl in enumerate([0, 5, 10, 15]):
-            qml.CRY(weights_anc0[k], wires=[ctrl, ANCILLA_0])
-
-        # Last qubit of each group (Sun[4], 9th[4], 8th[4], Saturn[4]) → 21
-        for k, ctrl in enumerate([4, 9, 14, 19]):
-            qml.CRY(weights_anc1[k], wires=[ctrl, ANCILLA_1])
+        # ── C. Full target funnel ───────────────────────────────────────────
+        # Every spatial qubit feeds both ancillas — so every input bit has
+        # a path to the readout. (Previous {first,last}-only funnel masked
+        # 12 of 20 input bits.)
+        for i in range(N_SPATIAL):
+            qml.CRY(weights_anc0[i], wires=[i, ANCILLA_0])
+        for i in range(N_SPATIAL):
+            qml.CRY(weights_anc1[i], wires=[i, ANCILLA_1])
 
         # Ancilla → target
         qml.CRY(weights_target[0], wires=[ANCILLA_0, TARGET])
