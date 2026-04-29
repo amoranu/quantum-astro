@@ -165,8 +165,10 @@ class AstrologyRouter:
         self.eighth_uses_cusp: bool = (self.ninth_lord == self._eighth_lord_planet)
         self.eighth_cusp_lon: float = float(self.eighth_sign_idx * 30) % 360.0
 
-        # Natal Moon longitude — needed for Vimshottari dasha computation.
-        self.natal_moon_lon: float = get_sidereal_longitude("Moon", self.birth_jd)
+        # Natal positions cached for chart-relative features
+        self.natal_moon_lon:   float = get_sidereal_longitude("Moon",   self.birth_jd)
+        self.natal_sun_lon:    float = get_sidereal_longitude("Sun",    self.birth_jd)
+        self.natal_saturn_lon: float = get_sidereal_longitude("Saturn", self.birth_jd)
 
     # ------------------------------------------------------------------
     @property
@@ -217,44 +219,60 @@ class AstrologyRouter:
     # ------------------------------------------------------------------
     def get_transit_features(self, event_jd: float) -> list[float]:
         """
-        Return 13 continuous features in radians, all *lagna-relative* where
-        applicable so that astrologically equivalent transits look numerically
-        equivalent across charts (chart-invariance fix).
+        Return 17 continuous features in radians (v11). All cyclic, [0, 2π].
+
+        Indices 0-12 are the v9 features (chart-relative).
+        Indices 13-16 are v11 additions (life-stage and natal-relative aspects).
 
         Ordered:
             [0-8]  9 planet longitudes RELATIVE TO NATAL LAGNA (mod 2π)
-                   "Sun in 1st house" maps to ~0, "Sun in 9th house" to ~8π/12,
-                   regardless of which absolute zodiac sign the lagna is in.
             [9]    Natal lagna sign idx (0-11) → 2π scaled
-                   (kept as absolute reference so model knows the chart anchor)
             [10]   Active Mahadasha lord (0-8) → 2π scaled
             [11]   Active Antardasha lord (0-8) → 2π scaled
-            [12]   Saturn's longitude RELATIVE TO NATAL SUN  (Saturn-return
-                   indicator, much more informative than the absolute 8th cusp
-                   which becomes constant after lagna-relative normalisation)
+            [12]   Saturn's longitude RELATIVE TO NATAL SUN
+            [13]   Subject's age at event, normalised over 100y cycle
+                   age_years / 100 × 2π — gives the model lifecycle context
+            [14]   Saturn vs NATAL MOON (Sade Sati indicator)
+                   primary Vedic timing tool for difficult / death events
+            [15]   Saturn vs NATAL SATURN (Saturn return, ~29.5y cycle)
+                   major life-transition indicator
+            [16]   Mars vs NATAL SUN (Mars-Sun aspect strength proxy)
+                   captures one Vedic aspect axis the model otherwise lacks
         """
         features: list[float] = []
         deg_to_rad = 2.0 * math.pi / 360.0
-        asc_deg    = self.asc_lon  # natal ascendant longitude in degrees
+        asc_deg    = self.asc_lon
 
-        # 0-8: nine planet longitudes, lagna-relative
+        # 0-8: planets, lagna-relative
         for planet in ALL_PLANETS_FOR_FEATURES:
             lon = get_sidereal_longitude(planet, event_jd)
             rel = (lon - asc_deg) % 360.0
             features.append(rel * deg_to_rad)
 
-        # 9: lagna sign as a chart anchor
+        # 9: lagna sign anchor
         features.append(self.lagna_sign_idx * (2.0 * math.pi / 12.0))
 
-        # 10-11: active dasha lords (chart-invariant via Vimshottari index)
+        # 10-11: dashas
         md_idx, ad_idx = compute_dasha(self.birth_jd, event_jd, self.natal_moon_lon)
         features.append(md_idx * (2.0 * math.pi / 9.0))
         features.append(ad_idx * (2.0 * math.pi / 9.0))
 
-        # 12: Saturn relative to natal Sun (Saturn-return / longevity indicator)
-        natal_sun_lon = get_sidereal_longitude("Sun", self.birth_jd)
-        sat_lon       = get_sidereal_longitude("Saturn", event_jd)
-        sat_rel_natal_sun = (sat_lon - natal_sun_lon) % 360.0
-        features.append(sat_rel_natal_sun * deg_to_rad)
+        # 12: Saturn vs natal Sun
+        sat_lon = get_sidereal_longitude("Saturn", event_jd)
+        features.append(((sat_lon - self.natal_sun_lon) % 360.0) * deg_to_rad)
+
+        # 13: subject age at event (normalised over 100y cycle)
+        age_years = (event_jd - self.birth_jd) / 365.25
+        features.append((age_years / 100.0) * (2.0 * math.pi))
+
+        # 14: Saturn vs natal Moon (Sade Sati)
+        features.append(((sat_lon - self.natal_moon_lon) % 360.0) * deg_to_rad)
+
+        # 15: Saturn vs natal Saturn (Saturn return)
+        features.append(((sat_lon - self.natal_saturn_lon) % 360.0) * deg_to_rad)
+
+        # 16: Mars vs natal Sun (aspect proxy)
+        mars_lon = get_sidereal_longitude("Mars", event_jd)
+        features.append(((mars_lon - self.natal_sun_lon) % 360.0) * deg_to_rad)
 
         return features

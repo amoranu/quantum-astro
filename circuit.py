@@ -1,23 +1,27 @@
 """
-Phase 3 — 16-qubit angle-encoded VQC (Project Pitru-Maraka 2.0, v6).
+Phase 3 — 20-qubit angle-encoded VQC (Project Pitru-Maraka 2.0, v11).
 
 Wire layout (1 qubit per entity, continuous angle encoding):
-    q[0]  Sun longitude
-    q[1]  Moon longitude
-    q[2]  Mars longitude
-    q[3]  Mercury longitude
-    q[4]  Jupiter longitude
-    q[5]  Venus longitude
-    q[6]  Saturn longitude
-    q[7]  Rahu longitude (mean north node)
-    q[8]  Ketu longitude (Rahu + 180°)
-    q[9]  Natal lagna sign  (0-11 → 2π)
-    q[10] Active Mahadasha lord (0-8 → 2π)
-    q[11] Active Antardasha lord (0-8 → 2π)
-    q[12] Natal 8th house cusp longitude
-    q[13] Ancilla 0 (aggregator)
-    q[14] Ancilla 1 (aggregator)
-    q[15] Target
+    q[0]   Sun longitude (lagna-relative)
+    q[1]   Moon longitude (lagna-relative)
+    q[2]   Mars longitude (lagna-relative)
+    q[3]   Mercury longitude (lagna-relative)
+    q[4]   Jupiter longitude (lagna-relative)
+    q[5]   Venus longitude (lagna-relative)
+    q[6]   Saturn longitude (lagna-relative)
+    q[7]   Rahu longitude (lagna-relative)
+    q[8]   Ketu longitude (lagna-relative)
+    q[9]   Natal lagna sign  (0-11 → 2π)
+    q[10]  Active Mahadasha lord (0-8 → 2π)
+    q[11]  Active Antardasha lord (0-8 → 2π)
+    q[12]  Saturn vs natal Sun
+    q[13]  Subject age at event (normalised /100y)
+    q[14]  Saturn vs natal Moon (Sade Sati)
+    q[15]  Saturn vs natal Saturn (Saturn return)
+    q[16]  Mars vs natal Sun (aspect proxy)
+    q[17]  Ancilla 0 (aggregator)
+    q[18]  Ancilla 1 (aggregator)
+    q[19]  Target
 
 Why this design:
   * 1-qubit-per-entity at degree precision packs ~5.8× more information
@@ -48,11 +52,11 @@ import numpy as np
 import pennylane as qml
 import torch
 
-N_QUBITS    = 16
-N_ENTITIES  = 13
-ANCILLA_0   = 13
-ANCILLA_1   = 14
-TARGET      = 15
+N_QUBITS    = 20
+N_ENTITIES  = 17
+ANCILLA_0   = 17
+ANCILLA_1   = 18
+TARGET      = 19
 
 WEIGHT_SHAPES: dict[str, tuple[int, ...]] = {
     "weights_ry1":   (N_ENTITIES,),       # single variational layer: RY
@@ -83,7 +87,7 @@ def build_qlayer() -> qml.qnn.TorchLayer:
     """
     16-qubit angle-encoded QNode wrapped as a TorchLayer.
 
-    Input  : float32 tensor (13,)   — radians.
+    Input  : float32 tensor (17,)   — radians.
     Output : float32 tensor (3,)    — [⟨Z⟩, ⟨X⟩, ⟨Y⟩] on target wire, each ∈ [-1, 1].
              Caller mixes via Linear(3, 1) → logit → σ for P(death).
     """

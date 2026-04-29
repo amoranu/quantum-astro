@@ -31,7 +31,7 @@ class QMLModel(nn.Module):
     """
     16-qubit PennyLane TorchLayer + classical Linear(3, 1) head.
 
-    Forward input  : (batch, 13) float — angle features (radians).
+    Forward input  : (batch, 17) float — angle features (radians).
     Quantum output : (batch, 3)  float — [⟨Z⟩, ⟨X⟩, ⟨Y⟩] on the target wire.
     Forward output : (batch,)   float — *logits* (apply σ for probability).
 

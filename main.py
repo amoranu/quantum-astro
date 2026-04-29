@@ -115,9 +115,15 @@ def _run_smoke_test(data_path: Path) -> None:
     print(f"  natal_moon_lon     = {router.natal_moon_lon:.3f}°", flush=True)
 
     feature_labels = [
-        "Sun lon", "Moon lon", "Mars lon", "Mercury lon", "Jupiter lon",
-        "Venus lon", "Saturn lon", "Rahu lon", "Ketu lon",
-        "Lagna sign", "Mahadasha lord", "Antardasha lord", "8th cusp lon",
+        "Sun (lagna-rel)", "Moon (lagna-rel)", "Mars (lagna-rel)",
+        "Mercury (lagna-rel)", "Jupiter (lagna-rel)", "Venus (lagna-rel)",
+        "Saturn (lagna-rel)", "Rahu (lagna-rel)", "Ketu (lagna-rel)",
+        "Lagna sign", "Mahadasha lord", "Antardasha lord",
+        "Saturn vs natal Sun",
+        "Age at event",
+        "Saturn vs natal Moon",
+        "Saturn vs natal Saturn",
+        "Mars vs natal Sun",
     ]
 
     death_jd = date_to_jd(rec["father_death_date"])
@@ -129,7 +135,7 @@ def _run_smoke_test(data_path: Path) -> None:
         md, ad = compute_dasha(router.birth_jd, jd, router.natal_moon_lon)
         print(f"\n--- {label} (JD={jd:.3f}) ---", flush=True)
         print(f"  Active Mahadasha = {VIMSHOTTARI_LORDS[md]}  Antardasha = {VIMSHOTTARI_LORDS[ad]}", flush=True)
-        assert len(feats) == 13, f"Expected 13 features, got {len(feats)}"
+        assert len(feats) == 17, f"Expected 17 features, got {len(feats)}"
         for lbl, f in zip(feature_labels, feats):
             deg = f * 180.0 / math.pi
             print(f"  {lbl:18s} = {f:+.4f} rad  ({deg:+7.2f}°)", flush=True)
@@ -137,7 +143,7 @@ def _run_smoke_test(data_path: Path) -> None:
         for lbl, f in zip(feature_labels, feats):
             assert 0.0 <= f <= 2.0 * math.pi + 1e-6, f"{lbl} out of [0, 2π]: {f}"
 
-    print("\n[smoke] all 13 features in [0, 2π] ✓", flush=True)
+    print("\n[smoke] all 17 features in [0, 2π] ✓", flush=True)
     print("[smoke] dasha lookup ✓", flush=True)
     print("[smoke] feature-pipeline OK — safe to launch training\n", flush=True)
 
@@ -196,7 +202,7 @@ def main() -> None:
         )
 
         # ── Phases 3+4: Train ──────────────────────────────────────────────
-        print("\n[Phases 3+4] Initialising 16-qubit VQC and training …\n")
+        print("\n[Phases 3+4] Initialising 20-qubit VQC and training …\n")
         from train import train
         model = train(
             X_tr, Y_tr,
