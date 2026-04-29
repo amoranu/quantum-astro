@@ -3,7 +3,22 @@
     "allow": [
       "PowerShell(wsl -d Ubuntu -- bash -c \"ps -C python3 -o pid,etime,pcpu --no-headers\")",
       "PowerShell(wsl -d Ubuntu -- bash -c \"ps -C python3 -o pid --no-headers | xargs -r kill -9 2>/dev/null; sleep 1; ps -C python3 -o pid --no-headers || echo CLEAN\")",
-      "PowerShell(wsl -d Ubuntu -- bash -c \"ps -C python3 -o etime --no-headers\")"
+      "PowerShell(wsl -d Ubuntu -- bash -c \"ps -C python3 -o etime --no-headers\")",
+      "PowerShell(wsl -d Ubuntu -- bash -c \"ps -C python3*\")",
+      "PowerShell(wsl -d Ubuntu -- bash -c \"nvidia-smi*\")",
+      "PowerShell(wsl -d Ubuntu -- bash*)",
+      "PowerShell(wsl*)",
+      "Bash(grep -c*)",
+      "Bash(tail*)",
+      "Bash(head*)",
+      "Bash(wc -l*)",
+      "Bash(cd \"c:/Users/ravii/.gemini/antigravity/playground/quantum-astro\"*)",
+      "PowerShell(wsl -d Ubuntu -- bash /mnt/c/Users/ravii/.gemini/antigravity/playground/quantum-astro/run_wsl.sh*)",
+      "PowerShell(wsl -d Ubuntu -- bash -c \"source ~/.venvs/quantum-astro/bin/activate && cd /mnt/c/Users/ravii/.gemini/antigravity/playground/quantum-astro && python3 -u main.py --smoke-test\")",
+      "PowerShell(wsl -d Ubuntu -- bash -c \"source*\")",
+      "Bash(grep*)",
+      "Bash(cat*)",
+      "Bash(ls*)"
     ]
   }
 }

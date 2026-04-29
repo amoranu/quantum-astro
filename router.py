@@ -1,14 +1,25 @@
 """
-Phase 1 — Dynamic Astrological Role Router (Project Pitru-Maraka 2.0).
+Phase 1 — Dynamic Astrological Router (Project Pitru-Maraka 2.0).
 
-Resolves the 5 abstract astrological roles to physical planets (or a natal
-house-cusp fallback) for any given birth chart, then encodes the transit
-sky for a target event date as 5 Nakshatra indices (0-26).
+For v6 (angle-encoding), the router exposes `get_transit_features()` which
+returns 13 continuous angles in radians:
+   9 planet longitudes (Sun, Moon, Mars, Mercury, Jupiter, Venus, Saturn,
+                        Rahu, Ketu) — degree precision via 2π/360°
+   1 natal lagna sign  (0-11   → 2π/12)
+   2 active dasha lords (MD, AD; cycling 0-8 → 2π/9)
+   1 natal 8th house cusp longitude (degree precision)
+
+The legacy `get_transit_encoding()` (4 nakshatra indices) is retained for
+backward-compat with predict.py / pipeline.py callers that still want it.
 """
+
+import math
 
 import swisseph as swe
 import pytz
 from datetime import datetime
+
+from dasha import compute_dasha
 
 # Traditional Parashari sign-to-ruling-planet map (outer planets excluded).
 # Index 0 = Aries, 1 = Taurus, ..., 11 = Pisces.
@@ -35,7 +46,14 @@ PLANET_SWE_IDS: dict[str, int] = {
     "Jupiter": swe.JUPITER,
     "Venus":   swe.VENUS,
     "Saturn":  swe.SATURN,
+    # Lunar nodes: Rahu = mean north node, Ketu = Rahu + 180° (computed below)
+    "Rahu":    swe.MEAN_NODE,
+    # "Ketu" is not a swisseph body — we derive it from Rahu in get_sidereal_longitude.
 }
+
+ALL_PLANETS_FOR_FEATURES: list[str] = [
+    "Sun", "Moon", "Mars", "Mercury", "Jupiter", "Venus", "Saturn", "Rahu", "Ketu",
+]
 
 NAKSHATRA_SIZE: float = 360.0 / 27.0   # 13.333...° per Nakshatra
 
@@ -68,8 +86,12 @@ def date_to_jd(date_str: str) -> float:
 
 
 def get_sidereal_longitude(planet_name: str, jd: float) -> float:
-    """Return Lahiri sidereal longitude of *planet_name* at Julian Day *jd*."""
+    """Return Lahiri sidereal longitude (°) of *planet_name* at Julian Day *jd*.
+    Ketu is derived as Rahu + 180°."""
     swe.set_sid_mode(swe.SIDM_LAHIRI)
+    if planet_name == "Ketu":
+        rahu_lon = get_sidereal_longitude("Rahu", jd)
+        return (rahu_lon + 180.0) % 360.0
     result, _ = swe.calc_ut(
         jd, PLANET_SWE_IDS[planet_name], swe.FLG_SIDEREAL | swe.FLG_SPEED
     )
@@ -143,6 +165,9 @@ class AstrologyRouter:
         self.eighth_uses_cusp: bool = (self.ninth_lord == self._eighth_lord_planet)
         self.eighth_cusp_lon: float = float(self.eighth_sign_idx * 30) % 360.0
 
+        # Natal Moon longitude — needed for Vimshottari dasha computation.
+        self.natal_moon_lon: float = get_sidereal_longitude("Moon", self.birth_jd)
+
     # ------------------------------------------------------------------
     @property
     def eighth_lord(self) -> str:
@@ -186,3 +211,50 @@ class AstrologyRouter:
         n3 = longitude_to_nakshatra(get_sidereal_longitude("Saturn", event_jd))
 
         return [n0, n1, n2, n3]
+
+    # ------------------------------------------------------------------
+    # v6 — angle features (continuous)
+    # ------------------------------------------------------------------
+    def get_transit_features(self, event_jd: float) -> list[float]:
+        """
+        Return 13 continuous features in radians, all *lagna-relative* where
+        applicable so that astrologically equivalent transits look numerically
+        equivalent across charts (chart-invariance fix).
+
+        Ordered:
+            [0-8]  9 planet longitudes RELATIVE TO NATAL LAGNA (mod 2π)
+                   "Sun in 1st house" maps to ~0, "Sun in 9th house" to ~8π/12,
+                   regardless of which absolute zodiac sign the lagna is in.
+            [9]    Natal lagna sign idx (0-11) → 2π scaled
+                   (kept as absolute reference so model knows the chart anchor)
+            [10]   Active Mahadasha lord (0-8) → 2π scaled
+            [11]   Active Antardasha lord (0-8) → 2π scaled
+            [12]   Saturn's longitude RELATIVE TO NATAL SUN  (Saturn-return
+                   indicator, much more informative than the absolute 8th cusp
+                   which becomes constant after lagna-relative normalisation)
+        """
+        features: list[float] = []
+        deg_to_rad = 2.0 * math.pi / 360.0
+        asc_deg    = self.asc_lon  # natal ascendant longitude in degrees
+
+        # 0-8: nine planet longitudes, lagna-relative
+        for planet in ALL_PLANETS_FOR_FEATURES:
+            lon = get_sidereal_longitude(planet, event_jd)
+            rel = (lon - asc_deg) % 360.0
+            features.append(rel * deg_to_rad)
+
+        # 9: lagna sign as a chart anchor
+        features.append(self.lagna_sign_idx * (2.0 * math.pi / 12.0))
+
+        # 10-11: active dasha lords (chart-invariant via Vimshottari index)
+        md_idx, ad_idx = compute_dasha(self.birth_jd, event_jd, self.natal_moon_lon)
+        features.append(md_idx * (2.0 * math.pi / 9.0))
+        features.append(ad_idx * (2.0 * math.pi / 9.0))
+
+        # 12: Saturn relative to natal Sun (Saturn-return / longevity indicator)
+        natal_sun_lon = get_sidereal_longitude("Sun", self.birth_jd)
+        sat_lon       = get_sidereal_longitude("Saturn", event_jd)
+        sat_rel_natal_sun = (sat_lon - natal_sun_lon) % 360.0
+        features.append(sat_rel_natal_sun * deg_to_rad)
+
+        return features

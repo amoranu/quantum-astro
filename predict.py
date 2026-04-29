@@ -11,7 +11,7 @@ Returns a dict with:
     prediction  : "High Risk Window" if P(death) ≥ 0.85, else "Baseline"
     probability : float in [0, 1]
     roles       : dynamic planet assignments for this subject
-    nakshatras  : [n_sun, n_9th, n_8th, n_saturn]
+    features    : 13 angle-encoded transit features (radians)
     target_date : echo of the input date
 """
 
@@ -22,7 +22,6 @@ from pathlib import Path
 import torch
 
 from router import AstrologyRouter, date_to_jd
-from pipeline import encode_four_nakshatras
 from train import QMLModel, load_model
 
 RISK_THRESHOLD = 0.85
@@ -54,18 +53,16 @@ def predict(
     )
     roles = router.get_roles()
 
-    # 5.2 — Encode the transit sky on target_date
-    event_jd   = date_to_jd(target_date)
-    nakshatras = router.get_transit_encoding(event_jd)
-    bits       = encode_four_nakshatras(nakshatras)
-    x          = torch.tensor([bits], dtype=torch.float32)   # (1, 20)
+    # 5.2 — Encode transit sky as 13 angle features (radians)
+    event_jd = date_to_jd(target_date)
+    features = router.get_transit_features(event_jd)
+    x        = torch.tensor([features], dtype=torch.float32)  # (1, 13)
 
     # 5.3 — Forward pass (inference only) — model returns logits, apply σ
     model.eval()
     with torch.no_grad():
         prob: float = torch.sigmoid(model(x)).item()
 
-    # 5.4 — Decision gate
     if prob >= RISK_THRESHOLD:
         prediction = "High Risk Window"
     else:
@@ -75,7 +72,7 @@ def predict(
         "prediction":  prediction,
         "probability": round(prob, 6),
         "roles":       roles,
-        "nakshatras":  nakshatras,
+        "features":    features,
         "target_date": target_date,
     }
 
@@ -110,10 +107,9 @@ def scan_window(
     while current <= end_dt:
         date_str = current.strftime("%Y-%m-%d")
         try:
-            event_jd   = date_to_jd(date_str)
-            nakshatras = router.get_transit_encoding(event_jd)
-            bits       = encode_four_nakshatras(nakshatras)
-            x          = torch.tensor([bits], dtype=torch.float32)
+            event_jd = date_to_jd(date_str)
+            features = router.get_transit_features(event_jd)
+            x        = torch.tensor([features], dtype=torch.float32)
 
             model.eval()
             with torch.no_grad():

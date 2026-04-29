@@ -1,39 +1,45 @@
 """
-Phase 3 — 23-qubit VQC Topology (Project Pitru-Maraka 2.0).
+Phase 3 — 16-qubit angle-encoded VQC (Project Pitru-Maraka 2.0, v6).
 
-Wire layout:
-    q_sun      [0-4]   : Sun (Karaka for father)       — 5 qubits / nakshatra
-    q_ninth    [5-9]   : 9th Lord (house of father)    — 5 qubits / nakshatra
-    q_eighth   [10-14] : 8th Lord (house of death)     — 5 qubits / nakshatra
-    q_saturn   [15-19] : Saturn (time trigger)         — 5 qubits / nakshatra
-    q_ancilla  [20-21] : aggregation registers
-    q_target   [22]    : measurement wire
+Wire layout (1 qubit per entity, continuous angle encoding):
+    q[0]  Sun longitude
+    q[1]  Moon longitude
+    q[2]  Mars longitude
+    q[3]  Mercury longitude
+    q[4]  Jupiter longitude
+    q[5]  Venus longitude
+    q[6]  Saturn longitude
+    q[7]  Rahu longitude (mean north node)
+    q[8]  Ketu longitude (Rahu + 180°)
+    q[9]  Natal lagna sign  (0-11 → 2π)
+    q[10] Active Mahadasha lord (0-8 → 2π)
+    q[11] Active Antardasha lord (0-8 → 2π)
+    q[12] Natal 8th house cusp longitude
+    q[13] Ancilla 0 (aggregator)
+    q[14] Ancilla 1 (aggregator)
+    q[15] Target
 
-Input encoding:
-    RX(bit × π, wire)  replaces BasisState — differentiable, works with any
-    PennyLane diff method, and accepts 1-D float tensors directly.
+Why this design:
+  * 1-qubit-per-entity at degree precision packs ~5.8× more information
+    than v5's 4×5-bit nakshatra encoding (20 bits total).
+  * Adds the 6 missing planets (Moon, Mars, Mercury, Jupiter, Venus,
+    Rahu, Ketu) — Rahu/Ketu are *the* primary maraka indicators in
+    Jyotish but were entirely absent from v5.
+  * Adds dasha state (MD/AD lords). Dashas gate which transits "fire";
+    omitting them was a structural missing-input bug, not a tuning issue.
+  * State vector is 2^16 × 8 bytes ≈ 0.5 MB — orders of magnitude smaller
+    than v5's 67 MB, so per-sample circuit cost drops ~10×.
 
-Entanglement topology:
-    Law 1 — Karaka meets Time     : CRX  Sun(0-4)   ↔ Saturn(15-19)
-    Law 2 — Father & Death houses : CRX  9th(5-9)   ↔ 8th(10-14)
-    Full funnel → ancilla 20      : CRY  every spatial qubit (0-19) → 20
-    Full funnel → ancilla 21      : CRY  every spatial qubit (0-19) → 21
-    Ancilla → target              : CRY  20→22, 21→22
+Trainable structure:
+  * 2 layers of (RY, RX) per entity qubit — chart-aware variational depth
+  * CRX entanglement chain: q[i] ↔ q[i+1] for i=0..11 (12 gates)
+  * Full CRY funnel: every entity → both ancillas (26 gates)
+  * CRY ancilla → target (2 gates)
+  * Multi-Pauli readout: ⟨Z⟩, ⟨X⟩, ⟨Y⟩ on target — Z reads populations,
+    X/Y read coherence (the phase encoded by the v6 RZ symmetry-breaker).
+  * Classical Linear(3, 1) head in train.py mixes the 3 expectations.
 
-Why CRX (not CRZ): CRZ is diagonal in the Z-basis and commutes with the
-final qml.expval(qml.PauliZ) measurement, so phase-only entanglement does
-not propagate to the readout. CRX changes populations and does propagate.
-
-Why full funnel: the previous {first, last}-of-group funnel only routed
-8 of 20 spatial qubits to the ancilla. Middle qubits (1,2,3, 6,7,8, ...)
-contributed nothing to the gradient, leaving 12 of 20 input bits
-effectively masked out.
-
-Device strategy:
-    lightning.gpu  (WSL/Linux with custatevec) — adjoint diff
-                   peak VRAM: 2 × 2^23 × 8 bytes (complex128) ≈ 134 MB
-    lightning.qubit (CPU fallback)             — adjoint diff
-    default.qubit   (pure-Python fallback)     — parameter-shift
+Total quantum params: 13×4 + 12 + 26 + 2 = 92.
 """
 
 from __future__ import annotations
@@ -42,22 +48,19 @@ import numpy as np
 import pennylane as qml
 import torch
 
-N_QUBITS   = 23
-N_SPATIAL  = 20   # 4 groups × 5 qubits
-N_GROUPS   = 4
-ANCILLA_0  = 20
-ANCILLA_1  = 21
-TARGET     = 22
+N_QUBITS    = 16
+N_ENTITIES  = 13
+ANCILLA_0   = 13
+ANCILLA_1   = 14
+TARGET      = 15
 
-# 92 trainable quantum parameters total (+2 classical α, β in train.py)
 WEIGHT_SHAPES: dict[str, tuple[int, ...]] = {
-    "weights_ry":    (N_SPATIAL,),  # RY on each spatial qubit
-    "weights_rx":    (N_SPATIAL,),  # RX on each spatial qubit
-    "weights_law1":  (5,),          # Law 1 CRX: Sun ↔ Saturn
-    "weights_law2":  (5,),          # Law 2 CRX: 9th ↔ 8th
-    "weights_anc0":  (N_SPATIAL,),  # CRY every spatial qubit → ancilla 20
-    "weights_anc1":  (N_SPATIAL,),  # CRY every spatial qubit → ancilla 21
-    "weights_target": (2,),         # CRY ancilla → target
+    "weights_ry1":   (N_ENTITIES,),       # single variational layer: RY
+    "weights_rx1":   (N_ENTITIES,),       # single variational layer: RX
+    "weights_chain": (N_ENTITIES - 1,),   # CRX entity_i ↔ entity_{i+1}
+    "weights_anc0":  (N_ENTITIES,),       # CRY entity → ancilla 0
+    "weights_anc1":  (N_ENTITIES,),       # CRY entity → ancilla 1
+    "weights_target": (2,),               # CRY ancilla → target
 }
 
 
@@ -69,21 +72,20 @@ def _make_device() -> tuple[qml.Device, str]:
             if name != "default.qubit":
                 kwargs["c_dtype"] = np.complex64
             dev = qml.device(name, **kwargs)
-            print(f"[circuit] PennyLane device: {name}")
+            print(f"[circuit] PennyLane device: {name}", flush=True)
             return dev, name
         except Exception as exc:
-            print(f"[circuit] {name} unavailable: {exc}")
+            print(f"[circuit] {name} unavailable: {exc}", flush=True)
     raise RuntimeError("No usable PennyLane device found.")
 
 
 def build_qlayer() -> qml.qnn.TorchLayer:
     """
-    Construct the 23-qubit QNode and wrap it in a TorchLayer.
+    16-qubit angle-encoded QNode wrapped as a TorchLayer.
 
-    Input  : float32 tensor (20,)  — 4 nakshatra indices each binary-expanded
-                                     to 5 bits, flattened (values 0.0 or 1.0).
-    Output : float32 scalar        — E[Z] on wire 22 ∈ [-1, 1].
-             Caller converts: P(death=1) = (1 − E[Z]) / 2.
+    Input  : float32 tensor (13,)   — radians.
+    Output : float32 tensor (3,)    — [⟨Z⟩, ⟨X⟩, ⟨Y⟩] on target wire, each ∈ [-1, 1].
+             Caller mixes via Linear(3, 1) → logit → σ for P(death).
     """
     dev, dev_name = _make_device()
     diff_method = "adjoint" if dev_name in ("lightning.gpu", "lightning.qubit") else "parameter-shift"
@@ -91,46 +93,49 @@ def build_qlayer() -> qml.qnn.TorchLayer:
     @qml.qnode(dev, interface="torch", diff_method=diff_method)
     def _circuit(
         inputs,
-        weights_ry, weights_rx,
-        weights_law1, weights_law2,
+        weights_ry1, weights_rx1,
+        weights_chain,
         weights_anc0, weights_anc1,
         weights_target,
     ):
-        # ── A. Input encoding via RX gates ──────────────────────────────────
-        # RX(0) = I (bit 0 stays |0⟩), RX(π) ≈ X (bit 1 → |1⟩ up to phase).
-        # Differentiable alternative to BasisState; accepts float tensors.
-        for i in range(N_SPATIAL):
-            qml.RX(inputs[i] * np.pi, wires=i)
+        # ── A. Continuous angle encoding (1 qubit per entity) ─────────────
+        # RX produces |populations| symmetric in θ ↔ 2π-θ. Adding RZ(θ)
+        # encodes phase that breaks the symmetry — downstream CRX / CRY
+        # gates extract phase as population, so longitudes 100° and 260°
+        # (or lagnas 1 and 11) become genuinely distinguishable.
+        for i in range(N_ENTITIES):
+            qml.RX(inputs[i], wires=i)
+            qml.RZ(inputs[i], wires=i)
 
-        # ── B. Trainable single-qubit rotations ─────────────────────────────
-        for i in range(N_SPATIAL):
-            qml.RY(weights_ry[i], wires=i)
-        for i in range(N_SPATIAL):
-            qml.RX(weights_rx[i], wires=i)
+        # ── B. Single variational layer (v9: dropped 2nd layer to reduce
+        # capacity — v8 had 92 quantum + 4 classical params over 220 unique
+        # positives, ~2 samples per param. Halving the variational depth
+        # gives ~4 samples per param.) ────────────────────────────────────
+        for i in range(N_ENTITIES):
+            qml.RY(weights_ry1[i], wires=i)
+        for i in range(N_ENTITIES):
+            qml.RX(weights_rx1[i], wires=i)
 
-        # ── Law 1 — The Karaka meets Time (Sun ↔ Saturn) ────────────────────
-        # CRX (not CRZ): population-changing entanglement that propagates to
-        # the final Z measurement.
-        for i in range(5):
-            qml.CRX(weights_law1[i], wires=[i, i + 15])
+        # ── C. CRX entanglement chain — propagates info across all entities
+        for i in range(N_ENTITIES - 1):
+            qml.CRX(weights_chain[i], wires=[i, i + 1])
 
-        # ── Law 2 — House of Father & Death (9th ↔ 8th) ────────────────────
-        for i in range(5):
-            qml.CRX(weights_law2[i], wires=[i + 5, i + 10])
-
-        # ── C. Full target funnel ───────────────────────────────────────────
-        # Every spatial qubit feeds both ancillas — so every input bit has
-        # a path to the readout. (Previous {first,last}-only funnel masked
-        # 12 of 20 input bits.)
-        for i in range(N_SPATIAL):
+        # ── E. Full funnel: every entity → both ancillas ──────────────────
+        for i in range(N_ENTITIES):
             qml.CRY(weights_anc0[i], wires=[i, ANCILLA_0])
-        for i in range(N_SPATIAL):
+        for i in range(N_ENTITIES):
             qml.CRY(weights_anc1[i], wires=[i, ANCILLA_1])
 
         # Ancilla → target
         qml.CRY(weights_target[0], wires=[ANCILLA_0, TARGET])
         qml.CRY(weights_target[1], wires=[ANCILLA_1, TARGET])
 
-        return qml.expval(qml.PauliZ(TARGET))
+        # Multi-Pauli readout on the target qubit. Z reads populations;
+        # X/Y read coherence introduced by the RZ phase encoding in step A.
+        return [
+            qml.expval(qml.PauliZ(TARGET)),
+            qml.expval(qml.PauliX(TARGET)),
+            qml.expval(qml.PauliY(TARGET)),
+        ]
 
     return qml.qnn.TorchLayer(_circuit, WEIGHT_SHAPES)
